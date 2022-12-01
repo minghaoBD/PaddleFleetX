@@ -32,24 +32,23 @@ def get_pruned_params(model):
                 # 1. param.shape[1] == 3 * param.shape[0]： prune fused-qkv's weight and its next weight: out-linear's weight
                 # 2. param.shape[1] == 4 * param.shape[0]： prune ffn1's weight and its next weight: ffn2's weight
                 # If your model has a different architecture, like your qkv's weights are not fused or ffn1_weight.shape[1] != 4*ffn1_weight.shape[0], you may need to customize this function to suit your model.
-                if param.shape[1] == 3 * param.shape[0] or param.shape[
-                        1] == 4 * param.shape[0]:
+                if param.shape[1] == 4 * param.shape[0] or param.shape[
+                        1] == 3 * param.shape[0]:
                     params.append(param.name)
 
     return params
 
 
-def prune_model(model, configs, inputs_desc=[]):
+def prune_model(model, configs, input_spec=[]):
     prune_criterion = configs.criterion
     ratio = configs.ratio
     shapes, dtypes = [], []
-    for input_desc in inputs_desc:
-        dtypes.append(input_desc.dtype)
-        new_shape = [10 if item == -1 else item for item in input_desc.shape]
+    for i in input_spec:
+        dtypes.append(i.dtype)
+        new_shape = [10 if item == -1 else item for item in i.shape]
         shapes.append(new_shape)
     #TODO(minghaoBD): support ViT and other model architectures in the future
     num_attention_heads = model.gpt.decoder.layers[0].self_attn.num_heads
-
     if prune_criterion == 'l1_norm':
         pruner = paddleslim.L1NormFilterPruner(
             model,
@@ -57,7 +56,8 @@ def prune_model(model, configs, inputs_desc=[]):
             skip_leaves=False,
             prune_type='fc',
             input_dtype=dtypes[0],
-            num_head=num_attention_heads)
+            num_head=num_attention_heads,
+            input_spec=input_spec)
     elif prune_criterion == 'l2_norm':
         pruner = paddleslim.L2NormFilterPruner(
             model,
@@ -65,13 +65,15 @@ def prune_model(model, configs, inputs_desc=[]):
             skip_leaves=False,
             prune_type='fc',
             input_dtype=dtypes[0],
-            num_head=num_attention_heads)
+            num_head=num_attention_heads,
+            input_spec=input_spec)
     params = get_pruned_params(model)
     ratios = {}
     for param in params:
         ratios[param] = ratio
     #NOTE(minghaoBD): hidden size in Layernorm must be 768/1024/2048/4096 for best inference performace, and when axis=0, the hidden size in layernorm will be changed accordingly. So axis=1 is required.
     plan = pruner.prune_vars(ratios, [1])
+    model.forward.rollback()
 
 
 def quant_model(model, configs):
